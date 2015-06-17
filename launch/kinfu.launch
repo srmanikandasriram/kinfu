@@ -1,0 +1,18 @@
+<launch>
+	<node name="kinfuLS" pkg="kinfu" type="kinfuLS" required="true" output="screen">
+        </node>
+
+	<node name="image_view_rgb" pkg="image_view" type="image_view">
+		<remap from="image" to="/camera/rgb/image_color"/>
+	</node>
+
+	<node name="image_view_depth" pkg="image_view" type="image_view">
+		<remap from="image" to="/camera/depth/image"/>
+	</node>
+
+	<node name="image_view_kinfu" pkg="image_view" type="image_view">
+		<remap from="image" to="/camera/kinfuLS/depth"/>
+	</node>
+
+	<include file="$(find openni_launch)/launch/openni.launch"/>
+</launch>
