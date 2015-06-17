@@ -33,6 +33,21 @@
 #include <dynamic_reconfigure/server.h>
 #include <kinfu/kinfu_Config.h>
 
+//// Libfreenect2
+#include <opencv2/opencv.hpp>
+#include <libfreenect2/libfreenect2.hpp>
+#include <libfreenect2/frame_listener_impl.h>
+#include <libfreenect2/threading.h>
+#include <libfreenect2/registration.h>
+#include <libfreenect2/packet_pipeline.h>
+
+#include <sensor_msgs/CameraInfo.h>
+#include <sensor_msgs/SetCameraInfo.h>
+#include <sensor_msgs/Image.h>
+#include <sensor_msgs/CompressedImage.h>
+#include <sensor_msgs/image_encodings.h>
+//// /Libfreenect2
+
 typedef pcl::ScopeTime ScopeTimeT;
 
 using namespace std;
@@ -171,7 +186,7 @@ struct CurrentFrameCloudView
 struct ImagePublisher
 {
   void
-  publishScene (KinfuTracker& kinfu, const sensor_msgs::ImageConstPtr& depth, bool registration, Eigen::Affine3f* pose_ptr = 0)
+  publishScene (KinfuTracker& kinfu, std_msgs::Header header, bool registration, Eigen::Affine3f* pose_ptr = 0)
   {
 //    if (pose_ptr)
 //    {
@@ -197,14 +212,14 @@ struct ImagePublisher
     sensor_msgs::fillImage((*msg), "rgb8", view_device_.rows(), view_device_.cols(),
     		view_device_.cols() * 3, &view_host_[0]);
 
-    msg->header.frame_id=depth->header.frame_id;
+    msg->header.frame_id = header.frame_id;
     pubKinfu.publish(msg);
   }
 
   ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
   void
-  publishPose (KinfuTracker& kinfu, const sensor_msgs::ImageConstPtr& depth)
+  publishPose (KinfuTracker& kinfu, std_msgs::Header header)
   {
 	  Eigen::Matrix<float, 3, 3, Eigen::RowMajor> erreMats = kinfu.getCameraPose().linear();
 	  Eigen::Vector3f teVecs = kinfu.getCameraPose().translation();
@@ -219,7 +234,7 @@ struct ImagePublisher
 	  	  tf::Vector3(teVecs[0], teVecs[1], teVecs[2])
 	  );
 
-	  odom_broad.sendTransform(tf::StampedTransform(transform, depth->header.stamp, "/odom", "/kinfu_frame"));
+	  odom_broad.sendTransform(tf::StampedTransform(transform, header.stamp, "/odom", "/kinfu_frame"));
   }
 
   ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -246,8 +261,8 @@ struct ImagePublisher
   {
     ros::NodeHandle nh;
     image_transport::ImageTransport it(nh);
-    pubKinfu = it.advertise("/camera/kinfuLS/depth", 10);
-    //pubgen = it.advertise("/camera/kinfuLS/generated_depth", 50);
+    pubKinfu = it.advertise("/kinect2/kinfuLS/depth", 10);
+    pubgen = it.advertise("/kinect2/kinfuLS/generated_depth", 50);
   }
 
 
@@ -301,7 +316,7 @@ struct KinFuLSApp
     kinfu_->setInitialCameraPose (pose);
     kinfu_->volume().setTsdfTruncDist (0.030f/*meters*/);
     kinfu_->setIcpCorespFilteringParams (0.1f/*meters*/, sin ( pcl::deg2rad(20.f) ));
-    //kinfu_->setDepthTruncationForICP(3.f/*meters*/);
+    kinfu_->setDepthTruncationForICP(3.f/*meters*/);
     kinfu_->setCameraMovementThreshold(0.001f);
 
     //Init KinFuLSApp
@@ -334,7 +349,7 @@ struct KinFuLSApp
   }
 
   //callback function, called with every new depth topic message
-  void execute(const sensor_msgs::ImageConstPtr& depth, const sensor_msgs::CameraInfoConstPtr& cameraInfo,
+  void execute(const cv::Mat depth, const sensor_msgs::CameraInfoConstPtr& cameraInfo,
                const sensor_msgs::ImageConstPtr& rgb = sensor_msgs::ImageConstPtr())
   {
     frame_counter_++;
@@ -344,10 +359,10 @@ struct KinFuLSApp
     	kinfu_->reset();
     	ROS_INFO("KinFu was reset \n");
     	pubKinfuReset.publish(std_msgs::Empty());
-//    	kinfu_->setDisableICP();
+   	  // kinfu_->setDisableICP();
     }
 
-    depth_device_.upload (&(depth->data[0]), depth->step, depth->height, depth->width);
+    depth_device_.upload (depth.data, depth.step, depth.rows, depth.cols);
      // if (integrate_colors_)
      //    image_view_.colors_device_.upload (rgb24.data, rgb24.step, rgb24.rows, rgb24.cols);
 
@@ -357,8 +372,7 @@ struct KinFuLSApp
      * K = 	[ 0 fy cy]
      * 		[ 0  0  1]
      */
-    (*kinfu_).setDepthIntrinsics(cameraInfo->K[0], cameraInfo->K[4],
-    		cameraInfo->K[2], cameraInfo->K[5]);
+    (*kinfu_).setDepthIntrinsics(cameraInfo->K[0], cameraInfo->K[4], cameraInfo->K[2], cameraInfo->K[5]);
 
 
     float focal_length = (cameraInfo->K[0] + cameraInfo->K[4]) / 2;
@@ -372,9 +386,9 @@ struct KinFuLSApp
     
 
     if ( image_view_.pubKinfu.getNumSubscribers() > 0)
-      image_view_.publishScene (*kinfu_, depth, registration_,  0);
-    image_view_.publishPose(*kinfu_, depth);
-    //image_view_.publishGeneratedDepth(*kinfu_);
+      image_view_.publishScene (*kinfu_, cameraInfo->header, registration_,  0);
+    image_view_.publishPose(*kinfu_, cameraInfo->header);
+    image_view_.publishGeneratedDepth(*kinfu_);
 
     //save snapshots
     if (enable_texture_extraction_)
@@ -501,47 +515,88 @@ int main(int argc, char* argv[])
   nh.getParam("et", app.enable_texture_extraction_);
 
 
-  // message_filters instead of image_transport because of synchronization over w-lan
-  typedef sync_policies::ApproximateTime<Image, CameraInfo, Image> DRGBSync;
-  message_filters::Synchronizer<DRGBSync>* texture_sync;
-  TimeSynchronizer<Image, CameraInfo>* depth_only_sync;
+  // // message_filters instead of image_transport because of synchronization over w-lan
+  // typedef sync_policies::ApproximateTime<Image, CameraInfo, Image> DRGBSync;
+  // message_filters::Synchronizer<DRGBSync>* texture_sync;
+  // TimeSynchronizer<Image, CameraInfo>* depth_only_sync;
 
-  message_filters::Subscriber<Image>* rgb_sub;
-  message_filters::Subscriber<Image>* depth_sub;
-  message_filters::Subscriber<CameraInfo>* info_sub;
+  // message_filters::Subscriber<Image>* rgb_sub;
+  // message_filters::Subscriber<Image>* depth_sub;
+  // message_filters::Subscriber<CameraInfo>* info_sub;
 
-  if (app.enable_texture_extraction_)
-  {
-    depth_sub = new message_filters::Subscriber<Image>(nh, "/camera/depth/image_raw", 2);
-    info_sub  = new message_filters::Subscriber<CameraInfo>(nh, "/camera/depth/camera_info", 2);
-    rgb_sub   = new message_filters::Subscriber<Image>(nh, "/camera/rgb/image_color", 2);
+  // if (app.enable_texture_extraction_)
+  // {
+  //   depth_sub = new message_filters::Subscriber<Image>(nh, "/kinect2/depth/image", 2);
+  //   info_sub  = new message_filters::Subscriber<CameraInfo>(nh, "/kinect2/depth/camera_info", 2);
+  //   rgb_sub   = new message_filters::Subscriber<Image>(nh, "/kinect2/rgb/image", 2);
 
-    //the depth and the rgb cameras are not hardware synchronized
-    //hence the depth and rgb images normally do not have the EXACT timestamp
-    //so use approximate time policy for synchronization
-    texture_sync = new message_filters::Synchronizer<DRGBSync>(DRGBSync(500), *depth_sub, *info_sub, *rgb_sub);
-    texture_sync->registerCallback(boost::bind(&KinFuLSApp::execute, &app, _1, _2, _3));
-    ROS_INFO("Running KinFu with texture extraction");
-  }
-  else
-  {
-    depth_sub = new message_filters::Subscriber<Image>(nh, "/camera/depth/image_raw", 1);
-    info_sub  = new message_filters::Subscriber<CameraInfo>(nh, "/camera/depth/camera_info", 1);
+  //   //the depth and the rgb cameras are not hardware synchronized
+  //   //hence the depth and rgb images normally do not have the EXACT timestamp
+  //   //so use approximate time policy for synchronization
+  //   texture_sync = new message_filters::Synchronizer<DRGBSync>(DRGBSync(500), *depth_sub, *info_sub, *rgb_sub);
+  //   texture_sync->registerCallback(boost::bind(&KinFuLSApp::execute, &app, _1, _2, _3));
+  //   ROS_INFO("Running KinFu with texture extraction");
+  // }
+  // else
+  // {
+  //   depth_sub = new message_filters::Subscriber<Image>(nh, "/kinect2/depth/image", 1);
+  //   info_sub  = new message_filters::Subscriber<CameraInfo>(nh, "/kinect2/depth/camera_info", 1);
 
-    depth_only_sync = new TimeSynchronizer<Image, CameraInfo>(*depth_sub, *info_sub, 500);
-    depth_only_sync -> registerCallback(boost::bind(&KinFuLSApp::execute, &app, _1, _2, sensor_msgs::ImageConstPtr()));
-    ROS_INFO("Running KinFu without texture extraction");
-  }
+  //   depth_only_sync = new TimeSynchronizer<Image, CameraInfo>(*depth_sub, *info_sub, 500);
+  //   depth_only_sync -> registerCallback(boost::bind(&KinFuLSApp::execute, &app, _1, _2, sensor_msgs::ImageConstPtr()));
+  //   ROS_INFO("Running KinFu without texture extraction");
+  // }
 
   dynamic_reconfigure::Server<kinfu::kinfu_Config> reconfServer(nh);
   reconfServer.setCallback(boost::bind(&KinFuLSApp::reconfCallback, &app, _1, _2));
 
+  //// Libfreenect2
+  libfreenect2::Freenect2 freenect2;
+  libfreenect2::Freenect2Device *dev = 0;
+  libfreenect2::PacketPipeline *pipeline = new libfreenect2::OpenGLPacketPipeline();
+  dev = freenect2.openDefaultDevice(pipeline);
+  libfreenect2::SyncMultiFrameListener listener(libfreenect2::Frame::Depth);
+  libfreenect2::FrameMap frames;
+  dev->setIrAndDepthFrameListener(&listener);
+  dev->start();
+  std::cout << "device serial: " << dev->getSerialNumber() << std::endl;
+  std::cout << "device firmware: " << dev->getFirmwareVersion() << std::endl;
+  //// /Libfreenect2
+
+  sensor_msgs::CameraInfo info;
+  // sensor_msgs::Image msgImage;
+  // sensor_msgs::ImagePtr imageptr (&msgImage);
+  sensor_msgs::CameraInfoPtr cameraptr (&info);
   ros::Rate loop_rate(40);
   while (nh.ok())
   {
     ros::spinOnce();
+    //// Libfreenect2
+    
+    listener.waitForNewFrame(frames);
+    libfreenect2::Frame *depth = frames[libfreenect2::Frame::Depth];
+    cv::Mat depthIm(depth->height, depth->width, CV_32FC1, depth->data);
+    cv::Mat depthMat;
+    depthIm.convertTo(depthMat, CV_16U);
+    cv::flip(depthMat, depthMat, 1);
+    
+    info.header.stamp = ros::Time::now();
+    info.header.frame_id = "kinect2_ir_optical_frame";
+    info.height = 424;
+    info.width = 512;
+    info.distortion_model = "plumb_bob";
+    info.D = {0.09965109080076218, -0.26981210708618164, 0.0, 0.0, 0.0853145569562912};
+    info.K = {364.6803894042969, 0.0, 256.4530944824219, 0.0, 364.6803894042969, 209.7216033935547, 0.0, 0.0, 1.0};
+    info.R = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+    info.P = {364.6803894042969, 0.0, 256.4530944824219, 0.0, 0.0, 364.6803894042969, 209.7216033935547, 0.0, 0.0, 0.0, 1.0, 0.0};
+  
+    app.execute(depthMat, cameraptr);
+    
+    listener.release(frames);
     loop_rate.sleep();
   }
+  dev->stop();
+  dev->close();
 
   return 0;
 }

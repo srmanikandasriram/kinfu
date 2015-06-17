@@ -6,7 +6,7 @@ find_package(catkin REQUIRED
 
 #include_directories(${PCL_INCLUDE_DIRS})
 
-find_package(Eigen REQUIRED)
+find_package(Eigen3 REQUIRED)
 include_directories(${EIGEN_INCLUDE_DIRS})
 add_definitions(${EIGEN_DEFINITIONS})
 
@@ -21,6 +21,17 @@ add_definitions(${PCL_DEFINITIONS})
 #add dynamic reconfigure api
 generate_dynamic_reconfigure_options(cfg/dyn_config.cfg)
 include_directories(include cfg/cpp)
+
+#### Freenect2
+find_package(freenect2)
+
+IF(freenect2_FOUND)
+  include_directories(${freenect2_INCLUDE_DIRS})
+  find_package(OpenCV REQUIRED core features2d)
+  include_directories(${OpenCV_INCLUDE_DIRS})
+ELSE(freenect2_FOUND)
+  add_definitions(-DCOMPILE_WITHOUT_freenect2)
+ENDIF(freenect2_FOUND)
 
 #### Cuda 
 find_package(CUDA)
@@ -46,3 +57,10 @@ target_link_libraries(kinfuLS ${catkin_LIBRARIES})
 
 target_link_libraries(kinfuLS ${CUDA_LIBRARIES})
 target_link_libraries(kinfuLS ${PCL_LIBRARIES})
+
+IF(freenect2_FOUND)
+	target_link_libraries(kinfuLS ${freenect2_LIBRARY})
+	set(OpenCV_LIBS opencv_core opencv_features2d)
+	target_link_libraries(kinfuLS ${OpenCV_LIBS})
+ENDIF()
+set(CMAKE_CXX_FLAGS "--std=c++11")

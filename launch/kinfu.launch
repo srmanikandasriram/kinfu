@@ -3,16 +3,16 @@
         </node>
 
 	<node name="image_view_rgb" pkg="image_view" type="image_view">
-		<remap from="image" to="/camera/rgb/image_color"/>
+		<remap from="image" to="/kinect2/rgb/image"/>
 	</node>
 
 	<node name="image_view_depth" pkg="image_view" type="image_view">
-		<remap from="image" to="/camera/depth/image"/>
+		<remap from="image" to="/kinect2/depth/image"/>
 	</node>
 
 	<node name="image_view_kinfu" pkg="image_view" type="image_view">
-		<remap from="image" to="/camera/kinfuLS/depth"/>
+		<remap from="image" to="/kinect2/kinfuLS/depth"/>
 	</node>
 
-	<include file="$(find openni_launch)/launch/openni.launch"/>
+<!--	<include file="$(find openni_launch)/launch/openni.launch"/>-->
 </launch>

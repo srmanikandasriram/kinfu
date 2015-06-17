@@ -1,0 +1,6 @@
+\subsubsection parameters ROS parameters
+
+Reads and maintains the following parameters on the ROS server
+
+- \b "~stop" : \b [bool] Stop capturing and save current world to world.pcd min: False, default: False, max: True
+

@@ -1,0 +1,7 @@
+\subsubsection usage Usage
+\verbatim
+<node name="kinfu" pkg="kinfu" type="kinfu">
+  <param name="stop" type="bool" value="False" />
+</node>
+\endverbatim
+
